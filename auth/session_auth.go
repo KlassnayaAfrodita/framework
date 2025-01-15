@@ -3,6 +3,7 @@ package auth
 import (
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"time"
 
@@ -13,8 +14,15 @@ import (
 	"github.com/goravel/framework/contracts/cache"
 	"github.com/goravel/framework/contracts/config"
 	"github.com/goravel/framework/contracts/database/orm"
+	"github.com/goravel/framework/support/database"
 	"github.com/goravel/framework/contracts/http"
-	"github.com/goravel/framework/errors"
+)
+
+// Ошибки
+var (
+	ErrAuthInvalidSession   = errors.New("invalid session")
+	ErrAuthNoPrimaryKeyField = errors.New("no primary key field found")
+	ErrAuthInvalidKey       = errors.New("invalid key")
 )
 
 const sessionKey = "GoravelAuthSession"
@@ -41,10 +49,14 @@ func (s *SessionAuth) Guard(name string) contractsauth.Auth {
 	return NewSessionAuth(name, s.cache, s.config, s.ctx, s.orm)
 }
 
+func (s *SessionAuth) Parse(token string) (any, error) {
+	return nil, errors.New("method Parse is not implemented for session authentication")
+}
+
 func (s *SessionAuth) User(user any) error {
 	sessionID := s.getSessionID()
 	if sessionID == "" {
-		return errors.AuthInvalidSession
+		return ErrAuthInvalidSession
 	}
 
 	userID, err := s.getUserIDFromSession(sessionID)
@@ -62,7 +74,7 @@ func (s *SessionAuth) User(user any) error {
 func (s *SessionAuth) ID() (string, error) {
 	sessionID := s.getSessionID()
 	if sessionID == "" {
-		return "", errors.AuthInvalidSession
+		return "", ErrAuthInvalidSession
 	}
 
 	userID, err := s.getUserIDFromSession(sessionID)
@@ -74,9 +86,9 @@ func (s *SessionAuth) ID() (string, error) {
 }
 
 func (s *SessionAuth) Login(user any) (string, error) {
-	id := database.GetID(user) // Получаем ID пользователя
+	id := database.GetID(user)
 	if id == nil {
-		return "", errors.AuthNoPrimaryKeyField
+		return "", ErrAuthNoPrimaryKeyField
 	}
 
 	return s.LoginUsingID(id)
@@ -86,7 +98,7 @@ func (s *SessionAuth) LoginUsingID(id any) (string, error) {
 	sessionID := s.generateSessionID()
 	userID := cast.ToString(id)
 	if userID == "" {
-		return "", errors.AuthInvalidKey
+		return "", ErrAuthInvalidKey
 	}
 
 	ttl := time.Duration(s.getSessionTTL()) * time.Minute
@@ -94,8 +106,7 @@ func (s *SessionAuth) LoginUsingID(id any) (string, error) {
 		return "", err
 	}
 
-	// Устанавливаем cookie с sessionID
-	s.ctx.WithCookie(&http.Cookie{
+	s.ctx.Response().SetCookie(&http.Cookie{
 		Name:    sessionKey,
 		Value:   sessionID,
 		Expires: time.Now().Add(ttl),
@@ -115,12 +126,11 @@ func (s *SessionAuth) Logout() error {
 		return err
 	}
 
-	// Удаляем cookie
-	s.ctx.WithCookie(&http.Cookie{
+	s.ctx.Response().SetCookie(&http.Cookie{
 		Name:   sessionKey,
 		Value:  "",
 		Path:   "/",
-		MaxAge: -1, // Удаляем cookie
+		MaxAge: -1,
 	})
 
 	return nil
@@ -129,7 +139,7 @@ func (s *SessionAuth) Logout() error {
 func (s *SessionAuth) Refresh() (string, error) {
 	sessionID := s.getSessionID()
 	if sessionID == "" {
-		return "", errors.AuthInvalidSession
+		return "", ErrAuthInvalidSession
 	}
 
 	userID, err := s.getUserIDFromSession(sessionID)
@@ -137,15 +147,13 @@ func (s *SessionAuth) Refresh() (string, error) {
 		return "", err
 	}
 
-	// Генерируем новый sessionID и обновляем TTL
 	newSessionID := s.generateSessionID()
 	ttl := time.Duration(s.getSessionTTL()) * time.Minute
 	if err := s.cache.Put(sessionKey+newSessionID, userID, ttl); err != nil {
 		return "", err
 	}
 
-	// Устанавливаем новый sessionID в cookie
-	s.ctx.WithCookie(&http.Cookie{
+	s.ctx.Response().SetCookie(&http.Cookie{
 		Name:    sessionKey,
 		Value:   newSessionID,
 		Expires: time.Now().Add(ttl),
@@ -168,8 +176,8 @@ func (s *SessionAuth) getSessionID() string {
 
 func (s *SessionAuth) getUserIDFromSession(sessionID string) (string, error) {
 	var userID string
-	if !s.cache.Get(sessionKey+sessionID, &userID) || userID == "" {
-		return "", errors.AuthInvalidSession
+	if !s.cache.Get(sessionKey+sessionID, &userID) {
+		return "", ErrAuthInvalidSession
 	}
 
 	return userID, nil
@@ -182,7 +190,7 @@ func (s *SessionAuth) generateSessionID() string {
 func (s *SessionAuth) getSessionTTL() int {
 	ttl := s.config.GetInt(fmt.Sprintf("auth.guards.%s.ttl", s.guard))
 	if ttl == 0 {
-		ttl = 60 // Default TTL: 60 минут
+		ttl = 60
 	}
 
 	return ttl
