@@ -16,7 +16,7 @@ import (
 	"github.com/goravel/framework/support/database"
 )
 
-const sessionCtxKey = "GoravelAuth"
+const sessionCtxKey = "GoravelSessionAuth"
 
 type Session struct {
 	SessionID string
@@ -25,20 +25,20 @@ type Session struct {
 type Sessions map[string]*Session
 
 type SessionAuth struct {
-	cache  cache.Cache
-	config config.Config
-	ctx    http.Context
-	session  string
-	orm    orm.Orm
+	cache   cache.Cache
+	config  config.Config
+	ctx     http.Context
+	session string
+	orm     orm.Orm
 }
 
 func NewSessionAuth(session string, cache cache.Cache, config config.Config, ctx http.Context, orm orm.Orm) *SessionAuth {
-	return &Auth{
-		cache:  cache,
-		config: config,
-		ctx:    ctx,
-		session:  session,
-		orm:    orm,
+	return &SessionAuth{
+		cache:   cache,
+		config:  config,
+		ctx:     ctx,
+		session: session,
+		orm:     orm,
 	}
 }
 
@@ -100,11 +100,11 @@ func (a *SessionAuth) SessionLogout() error {
 		return nil
 	}
 
-	if err := a.cache.Put(getSessionCacheKey(auth[a.session].SessionID), true, time.Duration(a.getTtl())*time.Minute,); err != nil {
+	if err := a.cache.Put(getSessionCacheKey(auth[a.session].SessionID), true, time.Duration(a.getSessionTtl())*time.Minute); err != nil {
 		return err
 	}
 
-	delete(auth, a.Session)
+	delete(auth, a.session)
 	a.ctx.WithValue(ctxKey, auth)
 
 	return nil
@@ -116,20 +116,20 @@ func (a *SessionAuth) SessionRefresh() (string, error) {
 		return "", errors.AuthParseTokenFirst
 	}
 
-	if !a.cache.GetBool(getSessionCacheKey(auth[a.Session].SessionID), false) {
-		return "", errors.AuthSessionExpired
+	if !a.cache.GetBool(getSessionCacheKey(auth[a.session].SessionID), false) {
+		return "", errors.AuthTokenExpired
 	}
 
 	return auth[a.session].SessionID, nil
 }
 
-func (a *Auth) makeSessionAuthContext(sessionID string) {
-	Sessions, ok := a.ctx.Value(ctxKey).(Sessions)
+func (a *SessionAuth) makeSessionAuthContext(sessionID string) {
+	sessions, ok := a.ctx.Value(ctxKey).(Sessions)
 	if !ok {
-		Sessions = make(Sessions)
+		sessions = make(Sessions)
 	}
-	Sessions[a.session] = &Session{SessionID: sessionID}
-	a.ctx.WithValue(ctxKey, Sessions)
+	sessions[a.session] = &Session{SessionID: sessionID}
+	a.ctx.WithValue(ctxKey, sessions)
 }
 
 func (a *SessionAuth) getSessionTtl() int {
@@ -142,8 +142,7 @@ func (a *SessionAuth) getSessionTtl() int {
 	}
 
 	if ttl == 0 {
-		// Default to 30 days
-		tl = 60 * 24 * 30
+		ttl = 60 * 24 * 30
 	}
 
 	return ttl
