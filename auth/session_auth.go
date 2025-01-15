@@ -32,7 +32,7 @@ type SessionAuth struct {
 	orm    orm.Orm
 }
 
-func NewSessionAuth(session string, cache cache.Cache, config config.Config, ctx http.Context, orm orm.Orm) *Auth {
+func NewSessionAuth(session string, cache cache.Cache, config config.Config, ctx http.Context, orm orm.Orm) *SessionAuth {
 	return &Auth{
 		cache:  cache,
 		config: config,
@@ -49,13 +49,13 @@ func (a *SessionAuth) Session(name string) contractsauth.Auth {
 func (a *SessionAuth) SessionUser(user any) error {
 	auth, ok := a.ctx.Value(ctxKey).(Sessions)
 	if !ok || auth[a.session] == nil {
-		return errors.AuthParseSessionFirst
+		return errors.AuthParseTokenFirst
 	}
 	if auth[a.session].SessionID == "" {
-		return errors.AuthInvalidSession
+		return errors.AuthInvalidKey
 	}
 
-	if err := a.orm.Query().FindOrFail(user, clause.Eq{Column: clause.PrimaryColumn, Value: auth[a.Session].SessionID}); err != nil {
+	if err := a.orm.Query().FindOrFail(user, clause.Eq{Column: clause.PrimaryColumn, Value: auth[a.session].SessionID}); err != nil {
 		return err
 	}
 
@@ -65,10 +65,10 @@ func (a *SessionAuth) SessionUser(user any) error {
 func (a *SessionAuth) SessionID() (string, error) {
 	auth, ok := a.ctx.Value(ctxKey).(Sessions)
 	if !ok || auth[a.session] == nil {
-		return "", errors.AuthParseSessionFirst
+		return "", errors.AuthParseTokenFirst
 	}
 	if auth[a.session].SessionID == "" {
-		return "", errors.AuthInvalidSession
+		return "", errors.AuthInvalidKey
 	}
 
 	return auth[a.session].SessionID, nil
@@ -82,14 +82,14 @@ func (a *SessionAuth) SessionLogin(user any) (string, error) {
 
 	sessionID := cast.ToString(id)
 	if sessionID == "" {
-		return "", errors.AuthInvalidSessionID
+		return "", errors.AuthInvalidKey
 	}
 
 	if err := a.cache.Put(getSessionCacheKey(sessionID), true, time.Duration(a.getSessionTtl())*time.Minute); err != nil {
 		return "", err
 	}
 
-	a.makeAuthContext(sessionID)
+	a.makeSessionAuthContext(sessionID)
 
 	return sessionID, nil
 }
@@ -100,7 +100,7 @@ func (a *SessionAuth) SessionLogout() error {
 		return nil
 	}
 
-	if err := a.cache.Forget(getSessionCacheKey(auth[a.Session].SessionID)); err != nil {
+	if err := a.cache.Put(getSessionCacheKey(auth[a.session].SessionID), true, time.Duration(a.getTtl())*time.Minute,); err != nil {
 		return err
 	}
 
@@ -113,7 +113,7 @@ func (a *SessionAuth) SessionLogout() error {
 func (a *SessionAuth) SessionRefresh() (string, error) {
 	auth, ok := a.ctx.Value(ctxKey).(Sessions)
 	if !ok || auth[a.session] == nil {
-		return "", errors.AuthParseSessionFirst
+		return "", errors.AuthParseTokenFirst
 	}
 
 	if !a.cache.GetBool(getSessionCacheKey(auth[a.Session].SessionID), false) {
