@@ -1,17 +1,20 @@
 package auth
 
 import (
+	"errors"
 	"fmt"
+	"strings"
 	"time"
 
-	"github.com/goravel/framework/contracts/auth"
+	"github.com/spf13/cast"
+	"gorm.io/gorm/clause"
+
+	contractsauth "github.com/goravel/framework/contracts/auth"
 	"github.com/goravel/framework/contracts/cache"
 	"github.com/goravel/framework/contracts/config"
 	"github.com/goravel/framework/contracts/database/orm"
 	"github.com/goravel/framework/contracts/http"
 	"github.com/goravel/framework/errors"
-	"github.com/goravel/framework/support/carbon"
-	"github.com/spf13/cast"
 )
 
 const sessionKey = "GoravelAuthSession"
@@ -34,7 +37,7 @@ func NewSessionAuth(guard string, cache cache.Cache, config config.Config, ctx h
 	}
 }
 
-func (s *SessionAuth) Guard(name string) auth.Auth {
+func (s *SessionAuth) Guard(name string) contractsauth.Auth {
 	return NewSessionAuth(name, s.cache, s.config, s.ctx, s.orm)
 }
 
@@ -44,12 +47,12 @@ func (s *SessionAuth) User(user any) error {
 		return errors.AuthInvalidSession
 	}
 
-	sessionData, err := s.getSessionData(sessionID)
+	userID, err := s.getUserIDFromSession(sessionID)
 	if err != nil {
 		return err
 	}
 
-	if err := s.orm.Query().FindOrFail(user, sessionData.UserID); err != nil {
+	if err := s.orm.Query().FindOrFail(user, clause.Eq{Column: clause.PrimaryColumn, Value: userID}); err != nil {
 		return err
 	}
 
@@ -62,36 +65,40 @@ func (s *SessionAuth) ID() (string, error) {
 		return "", errors.AuthInvalidSession
 	}
 
-	sessionData, err := s.getSessionData(sessionID)
+	userID, err := s.getUserIDFromSession(sessionID)
 	if err != nil {
 		return "", err
 	}
 
-	return sessionData.UserID, nil
+	return userID, nil
 }
 
 func (s *SessionAuth) Login(user any) (string, error) {
-	userID := cast.ToString(database.GetID(user))
-	if userID == "" {
+	id := database.GetID(user) // Получаем ID пользователя
+	if id == nil {
 		return "", errors.AuthNoPrimaryKeyField
 	}
 
-	sessionID := s.generateSessionID()
-	expiresAt := carbon.Now().AddMinutes(s.getSessionTTL()).StdTime()
+	return s.LoginUsingID(id)
+}
 
-	sessionData := &SessionData{
-		UserID:    userID,
-		ExpiresAt: expiresAt,
+func (s *SessionAuth) LoginUsingID(id any) (string, error) {
+	sessionID := s.generateSessionID()
+	userID := cast.ToString(id)
+	if userID == "" {
+		return "", errors.AuthInvalidKey
 	}
 
-	if err := s.cache.Put(sessionKey+sessionID, sessionData, time.Until(expiresAt)); err != nil {
+	ttl := time.Duration(s.getSessionTTL()) * time.Minute
+	if err := s.cache.Put(sessionKey+sessionID, userID, ttl); err != nil {
 		return "", err
 	}
 
-	s.ctx.SetCookie(&http.Cookie{
+	// Устанавливаем cookie с sessionID
+	s.ctx.WithCookie(&http.Cookie{
 		Name:    sessionKey,
 		Value:   sessionID,
-		Expires: expiresAt,
+		Expires: time.Now().Add(ttl),
 		Path:    "/",
 	})
 
@@ -108,11 +115,12 @@ func (s *SessionAuth) Logout() error {
 		return err
 	}
 
-	s.ctx.SetCookie(&http.Cookie{
+	// Удаляем cookie
+	s.ctx.WithCookie(&http.Cookie{
 		Name:   sessionKey,
 		Value:  "",
 		Path:   "/",
-		MaxAge: -1,
+		MaxAge: -1, // Удаляем cookie
 	})
 
 	return nil
@@ -124,64 +132,58 @@ func (s *SessionAuth) Refresh() (string, error) {
 		return "", errors.AuthInvalidSession
 	}
 
-	sessionData, err := s.getSessionData(sessionID)
+	userID, err := s.getUserIDFromSession(sessionID)
 	if err != nil {
 		return "", err
 	}
 
-	expiresAt := carbon.Now().AddMinutes(s.getSessionTTL()).StdTime()
-	sessionData.ExpiresAt = expiresAt
-
-	if err := s.cache.Put(sessionKey+sessionID, sessionData, time.Until(expiresAt)); err != nil {
+	// Генерируем новый sessionID и обновляем TTL
+	newSessionID := s.generateSessionID()
+	ttl := time.Duration(s.getSessionTTL()) * time.Minute
+	if err := s.cache.Put(sessionKey+newSessionID, userID, ttl); err != nil {
 		return "", err
 	}
 
-	s.ctx.SetCookie(&http.Cookie{
+	// Устанавливаем новый sessionID в cookie
+	s.ctx.WithCookie(&http.Cookie{
 		Name:    sessionKey,
-		Value:   sessionID,
-		Expires: expiresAt,
+		Value:   newSessionID,
+		Expires: time.Now().Add(ttl),
 		Path:    "/",
 	})
 
-	return sessionID, nil
+	return newSessionID, nil
 }
+
+// Вспомогательные методы
 
 func (s *SessionAuth) getSessionID() string {
-	cookie, err := s.ctx.Cookie(sessionKey)
-	if err != nil {
+	cookie, err := s.ctx.Request().Cookie(sessionKey)
+	if err != nil || cookie == nil {
 		return ""
 	}
-	return cookie
+
+	return strings.TrimSpace(cookie.Value)
 }
 
-func (s *SessionAuth) getSessionData(sessionID string) (*SessionData, error) {
-	var sessionData SessionData
-	if err := s.cache.Get(sessionKey+sessionID, &sessionData); err != nil {
-		return nil, errors.AuthSessionExpired
+func (s *SessionAuth) getUserIDFromSession(sessionID string) (string, error) {
+	var userID string
+	if !s.cache.Get(sessionKey+sessionID, &userID) || userID == "" {
+		return "", errors.AuthInvalidSession
 	}
 
-	if carbon.Now().Gt(carbon.FromStdTime(sessionData.ExpiresAt)) {
-		return nil, errors.AuthSessionExpired
-	}
-
-	return &sessionData, nil
+	return userID, nil
 }
 
 func (s *SessionAuth) generateSessionID() string {
-	return fmt.Sprintf("session_%d", time.Now().UnixNano())
+	return fmt.Sprintf("%d", time.Now().UnixNano())
 }
 
 func (s *SessionAuth) getSessionTTL() int {
-	sessionTTL := s.config.GetInt("auth.session_ttl")
-	if sessionTTL == 0 {
-		// Default session TTL: 30 minutes
-		sessionTTL = 30
+	ttl := s.config.GetInt(fmt.Sprintf("auth.guards.%s.ttl", s.guard))
+	if ttl == 0 {
+		ttl = 60 // Default TTL: 60 минут
 	}
 
-	return sessionTTL
-}
-
-type SessionData struct {
-	UserID    string    `json:"user_id"`
-	ExpiresAt time.Time `json:"expires_at"`
+	return ttl
 }
