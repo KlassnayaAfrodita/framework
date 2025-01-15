@@ -47,7 +47,7 @@ func (a *SessionAuth) Session(name string) contractsauth.Auth {
 }
 
 func (a *SessionAuth) SessionUser(user any) error {
-	auth, ok := a.ctx.Value(ctxKey).(Sessions)
+	auth, ok := a.ctx.Value(sessionCtxKey).(Sessions)
 	if !ok || auth[a.session] == nil {
 		return errors.AuthParseTokenFirst
 	}
@@ -63,7 +63,7 @@ func (a *SessionAuth) SessionUser(user any) error {
 }
 
 func (a *SessionAuth) SessionID() (string, error) {
-	auth, ok := a.ctx.Value(ctxKey).(Sessions)
+	auth, ok := a.ctx.Value(sessionCtxKey).(Sessions)
 	if !ok || auth[a.session] == nil {
 		return "", errors.AuthParseTokenFirst
 	}
@@ -95,7 +95,7 @@ func (a *SessionAuth) SessionLogin(user any) (string, error) {
 }
 
 func (a *SessionAuth) SessionLogout() error {
-	auth, ok := a.ctx.Value(ctxKey).(Sessions)
+	auth, ok := a.ctx.Value(sessionCtxKey).(Sessions)
 	if !ok || auth[a.session] == nil || auth[a.session].SessionID == "" {
 		return nil
 	}
@@ -105,13 +105,13 @@ func (a *SessionAuth) SessionLogout() error {
 	}
 
 	delete(auth, a.session)
-	a.ctx.WithValue(ctxKey, auth)
+	a.ctx.WithValue(sessionCtxKey, auth)
 
 	return nil
 }
 
 func (a *SessionAuth) SessionRefresh() (string, error) {
-	auth, ok := a.ctx.Value(ctxKey).(Sessions)
+	auth, ok := a.ctx.Value(sessionCtxKey).(Sessions)
 	if !ok || auth[a.session] == nil {
 		return "", errors.AuthParseTokenFirst
 	}
@@ -124,17 +124,17 @@ func (a *SessionAuth) SessionRefresh() (string, error) {
 }
 
 func (a *SessionAuth) makeSessionAuthContext(sessionID string) {
-	sessions, ok := a.ctx.Value(ctxKey).(Sessions)
+	sessions, ok := a.ctx.Value(sessionCtxKey).(Sessions)
 	if !ok {
 		sessions = make(Sessions)
 	}
 	sessions[a.session] = &Session{SessionID: sessionID}
-	a.ctx.WithValue(ctxKey, sessions)
+	a.ctx.WithValue(sessionCtxKey, sessions)
 }
 
 func (a *SessionAuth) getSessionTtl() int {
 	var ttl int
-	SessionTtl := a.config.Get(fmt.Sprintf("auth.Sessions.%s.ttl", a.Session))
+	SessionTtl := a.config.Get(fmt.Sprintf("auth.Sessions.%s.ttl", a.session))
 	if SessionTtl == nil {
 		ttl = a.config.GetInt("session.ttl")
 	} else {
