@@ -1,150 +1,154 @@
 package auth
 
 import (
-	"errors"
 	"fmt"
 	"time"
 
+	"github.com/spf13/cast"
+	"gorm.io/gorm/clause"
+
+	contractsauth "github.com/goravel/framework/contracts/auth"
+	"github.com/goravel/framework/contracts/cache"
 	"github.com/goravel/framework/contracts/config"
 	"github.com/goravel/framework/contracts/database/orm"
 	"github.com/goravel/framework/contracts/http"
 	"github.com/goravel/framework/errors"
 	"github.com/goravel/framework/support/database"
-	"github.com/spf13/cast"
 )
 
-const (
-	ctxKey = "GoravelSessionAuth"
-	cookieName = "session_id"
-)
+const ctxKey = "GoravelAuth"
 
-type SessionAuth struct {
+type Session struct {
+	SessionID string
+}
+
+type Sessions map[string]*Session
+
+type Auth struct {
+	cache  cache.Cache
 	config config.Config
 	ctx    http.Context
+	Session  string
 	orm    orm.Orm
-	sessionStore SessionStore
 }
 
-// SessionStore defines an interface for session storage (e.g., in-memory, Redis).
-type SessionStore interface {
-	Set(sessionID string, key string, value any, ttl time.Duration) error
-	Get(sessionID string, key string) (any, error)
-	Delete(sessionID string) error
-}
-
-func NewSessionAuth(config config.Config, ctx http.Context, orm orm.Orm, sessionStore SessionStore) *SessionAuth {
-	return &SessionAuth{
-		config:       config,
-		ctx:          ctx,
-		orm:          orm,
-		sessionStore: sessionStore,
+func NewAuth(Session string, cache cache.Cache, config config.Config, ctx http.Context, orm orm.Orm) *Auth {
+	return &Auth{
+		cache:  cache,
+		config: config,
+		ctx:    ctx,
+		Session:  Session,
+		orm:    orm,
 	}
 }
 
-func (a *SessionAuth) Guard(name string) *SessionAuth {
-	return &SessionAuth{
-		config:       a.config,
-		ctx:          a.ctx,
-		orm:          a.orm,
-		sessionStore: a.sessionStore,
-	}
+func (a *Auth) Session(name string) contractsauth.Auth {
+	return NewAuth(name, a.cache, a.config, a.ctx, a.orm)
 }
 
-func (a *SessionAuth) User(user any) error {
-	sessionID, err := a.ctx.Cookie(cookieName)
-	if err != nil || sessionID == "" {
-		return errors.New("no active session")
+func (a *Auth) User(user any) error {
+	auth, ok := a.ctx.Value(ctxKey).(Sessions)
+	if !ok || auth[a.Session] == nil {
+		return errors.AuthParseSessionFirst
+	}
+	if auth[a.Session].SessionID == "" {
+		return errors.AuthInvalidSession
 	}
 
-	userID, err := a.sessionStore.Get(sessionID, "user_id")
-	if err != nil {
-		return errors.New("session not found or expired")
-	}
-
-	if err := a.orm.Query().FindOrFail(user, database.Eq{Column: database.PrimaryColumn, Value: userID}); err != nil {
+	if err := a.orm.Query().FindOrFail(user, clause.Eq{Column: clause.PrimaryColumn, Value: auth[a.Session].SessionID}); err != nil {
 		return err
 	}
 
 	return nil
 }
 
-func (a *SessionAuth) ID() (string, error) {
-	sessionID, err := a.ctx.Cookie(cookieName)
-	if err != nil || sessionID == "" {
-		return "", errors.New("no active session")
+func (a *Auth) ID() (string, error) {
+	auth, ok := a.ctx.Value(ctxKey).(Sessions)
+	if !ok || auth[a.Session] == nil {
+		return "", errors.AuthParseSessionFirst
+	}
+	if auth[a.Session].SessionID == "" {
+		return "", errors.AuthInvalidSession
 	}
 
-	userID, err := a.sessionStore.Get(sessionID, "user_id")
-	if err != nil {
-		return "", errors.New("session not found or expired")
-	}
-
-	return cast.ToString(userID), nil
+	return auth[a.Session].SessionID, nil
 }
 
-func (a *SessionAuth) Login(user any) (string, error) {
+func (a *Auth) Login(user any) (string, error) {
 	id := database.GetID(user)
 	if id == nil {
-		return "", errors.New("user has no primary key field")
+		return "", errors.AuthNoPrimaryKeyField
 	}
 
-	sessionID := a.generateSessionID()
-	err := a.sessionStore.Set(sessionID, "user_id", cast.ToString(id), a.getSessionTTL())
-	if err != nil {
-		return "", fmt.Errorf("failed to set session: %w", err)
+	sessionID := cast.ToString(id)
+	if sessionID == "" {
+		return "", errors.AuthInvalidSessionID
 	}
 
-	a.ctx.WithCookie(cookieName, sessionID, int(a.getSessionTTL().Seconds()), "/", a.config.GetString("app.domain"), false, true)
+	if err := a.cache.Put(getSessionCacheKey(sessionID), true, time.Duration(a.getSessionTtl())*time.Minute); err != nil {
+		return "", err
+	}
+
+	a.makeAuthContext(sessionID)
+
 	return sessionID, nil
 }
 
-func (a *SessionAuth) Refresh() (string, error) {
-	sessionID, err := a.ctx.Cookie(cookieName)
-	if err != nil || sessionID == "" {
-		return "", errors.New("no active session")
-	}
-
-	userID, err := a.sessionStore.Get(sessionID, "user_id")
-	if err != nil {
-		return "", errors.New("session not found or expired")
-	}
-
-	newSessionID := a.generateSessionID()
-	err = a.sessionStore.Set(newSessionID, "user_id", userID, a.getSessionTTL())
-	if err != nil {
-		return "", fmt.Errorf("failed to refresh session: %w", err)
-	}
-
-	a.ctx.WithCookie(cookieName, newSessionID, int(a.getSessionTTL().Seconds()), "/", a.config.GetString("app.domain"), false, true)
-	return newSessionID, nil
-}
-
-func (a *SessionAuth) Logout() error {
-	sessionID, err := a.ctx.Cookie(cookieName)
-	if err != nil || sessionID == "" {
+func (a *Auth) Logout() error {
+	auth, ok := a.ctx.Value(ctxKey).(Sessions)
+	if !ok || auth[a.Session] == nil || auth[a.Session].SessionID == "" {
 		return nil
 	}
 
-	err = a.sessionStore.Delete(sessionID)
-	if err != nil {
-		return fmt.Errorf("failed to delete session: %w", err)
+	if err := a.cache.Forget(getSessionCacheKey(auth[a.Session].SessionID)); err != nil {
+		return err
 	}
 
-	a.ctx.WithCookie(cookieName, "", -1, "/", a.config.GetString("app.domain"), false, true)
+	delete(auth, a.Session)
+	a.ctx.WithValue(ctxKey, auth)
+
 	return nil
 }
 
-func (a *SessionAuth) generateSessionID() string {
-	// Generate a unique session ID (e.g., UUID or secure random string)
-	return fmt.Sprintf("session_%d", time.Now().UnixNano())
-}
-
-func (a *SessionAuth) getSessionTTL() time.Duration {
-	sessionTTL := a.config.GetInt("SessionAuth.session_ttl")
-	if sessionTTL == 0 {
-		// Default to 24 hours
-		sessionTTL = 60 * 24
+func (a *Auth) Refresh() (string, error) {
+	auth, ok := a.ctx.Value(ctxKey).(Sessions)
+	if !ok || auth[a.Session] == nil {
+		return "", errors.AuthParseSessionFirst
 	}
 
-	return time.Duration(sessionTTL) * time.Minute
+	if !a.cache.GetBool(getSessionCacheKey(auth[a.Session].SessionID), false) {
+		return "", errors.AuthSessionExpired
+	}
+
+	return auth[a.Session].SessionID, nil
+}
+
+func (a *Auth) makeAuthContext(sessionID string) {
+	Sessions, ok := a.ctx.Value(ctxKey).(Sessions)
+	if !ok {
+		Sessions = make(Sessions)
+	}
+	Sessions[a.Session] = &Session{SessionID: sessionID}
+	a.ctx.WithValue(ctxKey, Sessions)
+}
+
+func (a *Auth) getSessionTtl() int {
+	var ttl int
+	SessionTtl := a.config.Get(fmt.Sprintf("auth.Sessions.%s.ttl", a.Session))
+	if SessionTtl == nil {
+		ttl = a.config.GetInt("session.ttl")
+	} else {
+		ttl = cast.ToInt(SessionTtl)
+	}
+
+	if ttl == 0 {
+		// Default to 30 days
+		tl = 60 * 24 * 30
+	}
+
+	return ttl
+}
+
+func getSessionCacheKey(sessionID string) string {
+	return "session:" + sessionID
 }
