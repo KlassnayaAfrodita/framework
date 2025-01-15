@@ -16,7 +16,7 @@ import (
 	"github.com/goravel/framework/support/database"
 )
 
-const ctxKey = "GoravelAuth"
+const sessionCtxKey = "GoravelAuth"
 
 type Session struct {
 	SessionID string
@@ -24,7 +24,7 @@ type Session struct {
 
 type Sessions map[string]*Session
 
-type Auth struct {
+type SessionAuth struct {
 	cache  cache.Cache
 	config config.Config
 	ctx    http.Context
@@ -32,7 +32,7 @@ type Auth struct {
 	orm    orm.Orm
 }
 
-func NewAuth(Session string, cache cache.Cache, config config.Config, ctx http.Context, orm orm.Orm) *Auth {
+func NewSessionAuth(Session string, cache cache.Cache, config config.Config, ctx http.Context, orm orm.Orm) *Auth {
 	return &Auth{
 		cache:  cache,
 		config: config,
@@ -46,7 +46,7 @@ func (a *Auth) Session(name string) contractsauth.Auth {
 	return NewAuth(name, a.cache, a.config, a.ctx, a.orm)
 }
 
-func (a *Auth) User(user any) error {
+func (a *Auth) SessionUser(user any) error {
 	auth, ok := a.ctx.Value(ctxKey).(Sessions)
 	if !ok || auth[a.Session] == nil {
 		return errors.AuthParseSessionFirst
@@ -62,7 +62,7 @@ func (a *Auth) User(user any) error {
 	return nil
 }
 
-func (a *Auth) ID() (string, error) {
+func (a *Auth) SessionID() (string, error) {
 	auth, ok := a.ctx.Value(ctxKey).(Sessions)
 	if !ok || auth[a.Session] == nil {
 		return "", errors.AuthParseSessionFirst
@@ -74,7 +74,7 @@ func (a *Auth) ID() (string, error) {
 	return auth[a.Session].SessionID, nil
 }
 
-func (a *Auth) Login(user any) (string, error) {
+func (a *Auth) SessionLogin(user any) (string, error) {
 	id := database.GetID(user)
 	if id == nil {
 		return "", errors.AuthNoPrimaryKeyField
@@ -94,7 +94,7 @@ func (a *Auth) Login(user any) (string, error) {
 	return sessionID, nil
 }
 
-func (a *Auth) Logout() error {
+func (a *Auth) SessionLogout() error {
 	auth, ok := a.ctx.Value(ctxKey).(Sessions)
 	if !ok || auth[a.Session] == nil || auth[a.Session].SessionID == "" {
 		return nil
@@ -110,7 +110,7 @@ func (a *Auth) Logout() error {
 	return nil
 }
 
-func (a *Auth) Refresh() (string, error) {
+func (a *Auth) SessionRefresh() (string, error) {
 	auth, ok := a.ctx.Value(ctxKey).(Sessions)
 	if !ok || auth[a.Session] == nil {
 		return "", errors.AuthParseSessionFirst
@@ -123,7 +123,7 @@ func (a *Auth) Refresh() (string, error) {
 	return auth[a.Session].SessionID, nil
 }
 
-func (a *Auth) makeAuthContext(sessionID string) {
+func (a *Auth) makeSessionAuthContext(sessionID string) {
 	Sessions, ok := a.ctx.Value(ctxKey).(Sessions)
 	if !ok {
 		Sessions = make(Sessions)
