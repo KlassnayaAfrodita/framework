@@ -37,16 +37,16 @@ func NewSessionAuth(session string, cache cache.Cache, config config.Config, ctx
 		cache:  cache,
 		config: config,
 		ctx:    ctx,
-		Session:  session,
+		session:  session,
 		orm:    orm,
 	}
 }
 
-func (a *Auth) Session(name string) contractsauth.Auth {
+func (a *SessionAuth) Session(name string) contractsauth.Auth {
 	return NewAuth(name, a.cache, a.config, a.ctx, a.orm)
 }
 
-func (a *Auth) SessionUser(user any) error {
+func (a *SessionAuth) SessionUser(user any) error {
 	auth, ok := a.ctx.Value(ctxKey).(Sessions)
 	if !ok || auth[a.session] == nil {
 		return errors.AuthParseSessionFirst
@@ -62,7 +62,7 @@ func (a *Auth) SessionUser(user any) error {
 	return nil
 }
 
-func (a *Auth) SessionID() (string, error) {
+func (a *SessionAuth) SessionID() (string, error) {
 	auth, ok := a.ctx.Value(ctxKey).(Sessions)
 	if !ok || auth[a.session] == nil {
 		return "", errors.AuthParseSessionFirst
@@ -74,7 +74,7 @@ func (a *Auth) SessionID() (string, error) {
 	return auth[a.session].SessionID, nil
 }
 
-func (a *Auth) SessionLogin(user any) (string, error) {
+func (a *SessionAuth) SessionLogin(user any) (string, error) {
 	id := database.GetID(user)
 	if id == nil {
 		return "", errors.AuthNoPrimaryKeyField
@@ -94,7 +94,7 @@ func (a *Auth) SessionLogin(user any) (string, error) {
 	return sessionID, nil
 }
 
-func (a *Auth) SessionLogout() error {
+func (a *SessionAuth) SessionLogout() error {
 	auth, ok := a.ctx.Value(ctxKey).(Sessions)
 	if !ok || auth[a.session] == nil || auth[a.session].SessionID == "" {
 		return nil
@@ -110,7 +110,7 @@ func (a *Auth) SessionLogout() error {
 	return nil
 }
 
-func (a *Auth) SessionRefresh() (string, error) {
+func (a *SessionAuth) SessionRefresh() (string, error) {
 	auth, ok := a.ctx.Value(ctxKey).(Sessions)
 	if !ok || auth[a.session] == nil {
 		return "", errors.AuthParseSessionFirst
@@ -132,7 +132,7 @@ func (a *Auth) makeSessionAuthContext(sessionID string) {
 	a.ctx.WithValue(ctxKey, Sessions)
 }
 
-func (a *Auth) getSessionTtl() int {
+func (a *SessionAuth) getSessionTtl() int {
 	var ttl int
 	SessionTtl := a.config.Get(fmt.Sprintf("auth.Sessions.%s.ttl", a.Session))
 	if SessionTtl == nil {
