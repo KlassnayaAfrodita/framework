@@ -28,16 +28,16 @@ type SessionAuth struct {
 	cache  cache.Cache
 	config config.Config
 	ctx    http.Context
-	Session  string
+	session  string
 	orm    orm.Orm
 }
 
-func NewSessionAuth(Session string, cache cache.Cache, config config.Config, ctx http.Context, orm orm.Orm) *Auth {
+func NewSessionAuth(session string, cache cache.Cache, config config.Config, ctx http.Context, orm orm.Orm) *Auth {
 	return &Auth{
 		cache:  cache,
 		config: config,
 		ctx:    ctx,
-		Session:  Session,
+		Session:  session,
 		orm:    orm,
 	}
 }
@@ -48,10 +48,10 @@ func (a *Auth) Session(name string) contractsauth.Auth {
 
 func (a *Auth) SessionUser(user any) error {
 	auth, ok := a.ctx.Value(ctxKey).(Sessions)
-	if !ok || auth[a.Session] == nil {
+	if !ok || auth[a.session] == nil {
 		return errors.AuthParseSessionFirst
 	}
-	if auth[a.Session].SessionID == "" {
+	if auth[a.session].SessionID == "" {
 		return errors.AuthInvalidSession
 	}
 
@@ -64,14 +64,14 @@ func (a *Auth) SessionUser(user any) error {
 
 func (a *Auth) SessionID() (string, error) {
 	auth, ok := a.ctx.Value(ctxKey).(Sessions)
-	if !ok || auth[a.Session] == nil {
+	if !ok || auth[a.session] == nil {
 		return "", errors.AuthParseSessionFirst
 	}
-	if auth[a.Session].SessionID == "" {
+	if auth[a.session].SessionID == "" {
 		return "", errors.AuthInvalidSession
 	}
 
-	return auth[a.Session].SessionID, nil
+	return auth[a.session].SessionID, nil
 }
 
 func (a *Auth) SessionLogin(user any) (string, error) {
@@ -96,7 +96,7 @@ func (a *Auth) SessionLogin(user any) (string, error) {
 
 func (a *Auth) SessionLogout() error {
 	auth, ok := a.ctx.Value(ctxKey).(Sessions)
-	if !ok || auth[a.Session] == nil || auth[a.Session].SessionID == "" {
+	if !ok || auth[a.session] == nil || auth[a.session].SessionID == "" {
 		return nil
 	}
 
@@ -112,7 +112,7 @@ func (a *Auth) SessionLogout() error {
 
 func (a *Auth) SessionRefresh() (string, error) {
 	auth, ok := a.ctx.Value(ctxKey).(Sessions)
-	if !ok || auth[a.Session] == nil {
+	if !ok || auth[a.session] == nil {
 		return "", errors.AuthParseSessionFirst
 	}
 
@@ -120,7 +120,7 @@ func (a *Auth) SessionRefresh() (string, error) {
 		return "", errors.AuthSessionExpired
 	}
 
-	return auth[a.Session].SessionID, nil
+	return auth[a.session].SessionID, nil
 }
 
 func (a *Auth) makeSessionAuthContext(sessionID string) {
@@ -128,7 +128,7 @@ func (a *Auth) makeSessionAuthContext(sessionID string) {
 	if !ok {
 		Sessions = make(Sessions)
 	}
-	Sessions[a.Session] = &Session{SessionID: sessionID}
+	Sessions[a.session] = &Session{SessionID: sessionID}
 	a.ctx.WithValue(ctxKey, Sessions)
 }
 
